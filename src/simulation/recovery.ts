@@ -84,7 +84,8 @@ export interface StateTransition {
 export const STATE_TRANSITIONS: StateTransition[] = [
   { from: 'IDLE', to: 'PLANNING', trigger: 'Mission start', note: 'Compute K=3 route set with A* + Yen alternatives' },
   { from: 'PLANNING', to: 'TAKEOFF', trigger: 'Routes committed', note: 'Best-suitability route becomes active' },
-  { from: 'PLANNING', to: 'EMERGENCY_LANDING', trigger: 'No feasible route', note: 'Destination unreachable on the known map' },
+  { from: 'PLANNING', to: 'LANDED', trigger: 'No feasible destination route at launch', note: 'Abort at home without taking off' },
+  { from: 'REPLANNING', to: 'RETURNING', trigger: 'Destination routes exhausted', note: 'Plan a route back to launch and land at home' },
   { from: 'TAKEOFF', to: 'NAVIGATING', trigger: 'Cruise altitude reached', note: 'Path following begins' },
   { from: 'NAVIGATING', to: 'OBSTACLE_DETECTED', trigger: 'New obstacle in sensor FOV', note: 'Transient assessment state' },
   { from: 'OBSTACLE_DETECTED', to: 'REPLANNING', trigger: 'Obstacle confirmed', note: 'Recompute route set with the new obstacle' },

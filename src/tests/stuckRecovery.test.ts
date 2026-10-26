@@ -43,7 +43,7 @@ describe('stuck navigation recovery', () => {
     vi.spyOn(e.dynamics, 'step').mockImplementation(() => {});
     e.dynamics.altitude = 10;
     e.startMission();
-    await runSeconds(e, 26);
+    await runSeconds(e, 20);
     expect(plans).toBeGreaterThanOrEqual(3);
     expect(e.goalIsHome).toBe(false);
     expect(e.state).toBe('HOLD_POSITION');
@@ -61,5 +61,32 @@ describe('stuck navigation recovery', () => {
     const alternate = planRoutes({ ...input, planId: 2, avoidRoutes: [first.points] })[0];
     expect(routeHausdorff(first.points, alternate.points)).toBeGreaterThan(8);
     expect(alternate.metrics.minClearance).toBeGreaterThan(0);
+  });
+
+  it('returns and lands at launch after all destination paths fail mid-flight', async () => {
+    const e = makeEngine({ start: { x: 10, y: 10 }, destination: { x: 90, y: 90 },
+      planFn: async input => input.goal.x === 90 && input.goal.y === 10 ? [] : planRoutes(input) });
+    e.startMission();
+    await runSeconds(e, 14);
+    expect(Math.hypot(e.dynamics.pos.x - 10, e.dynamics.pos.y - 10)).toBeGreaterThan(5);
+    e.setDestination({ x: 90, y: 10 });
+    await runSeconds(e, 80);
+    expect(e.goalIsHome).toBe(true);
+    expect(e.state).toBe('LANDED');
+    expect(e.stateHistory.some(s => s.state === 'RETURNING')).toBe(true);
+    expect(e.stateHistory.some(s => s.state === 'EMERGENCY_LANDING')).toBe(false);
+    expect(Math.hypot(e.dynamics.pos.x - 10, e.dynamics.pos.y - 10)).toBeLessThan(3);
+    expect(e.timeline.filter(event => event.label.startsWith('Stuck recovery'))).toHaveLength(3);
+  });
+
+  it('stays home without an emergency when no initial destination path exists', async () => {
+    const e = makeEngine({ start: { x: 10, y: 10 }, destination: { x: 90, y: 90 },
+      planFn: async () => [] });
+    e.startMission();
+    await runSeconds(e, 1);
+    expect(e.state).toBe('LANDED');
+    expect(e.goalIsHome).toBe(true);
+    expect(e.dynamics.altitude).toBe(0);
+    expect(e.stateHistory.some(s => s.state === 'EMERGENCY_LANDING')).toBe(false);
   });
 });

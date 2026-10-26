@@ -797,9 +797,7 @@ export class SimulationEngine {
       if (this.goalIsHome) this.beginEmergencyLanding('Alternative routes home exhausted');
       else {
         this.addLog('recovery', 'Three navigation retries failed — returning home', explainHoldTimeout());
-        this.addTimeline('recovery', 'Alternative routes exhausted — return home');
-        this.commandReturnHome();
-        this.dispatchReplan();
+        this.returnHomeAfterNoPath();
       }
       return;
     }
@@ -813,6 +811,26 @@ export class SimulationEngine {
     this.setState('REPLANNING', message);
     this.recoveryPlanning = true;
     const trigger: ReplanTrigger = { kind: 'manual', message };
+    this.replanner.commit(this.t, trigger);
+    this.requestPlan(trigger);
+  }
+
+  private returnHomeAfterNoPath(): void {
+    this.resetStuckRecovery();
+    this.goal = { ...this.startPos };
+    this.goalIsHome = true;
+    this.retargetFlag = false;
+    this.activeRoute = null;
+    this.addLog('recovery', 'Destination unreachable — planning a safe return to launch', null);
+    this.addTimeline('recovery', 'No destination route — return home');
+    if (dist(this.dynamics.pos, this.startPos) <= GOAL_ARRIVE_RADIUS) {
+      this.landingPhase = this.dynamics.altitude > 0.03 ? 'home' : null;
+      this.setState('LANDED', 'Mission aborted at home — no destination route');
+      this.addTimeline('landing', 'At home — mission aborted');
+      return;
+    }
+    this.setState('RETURNING', 'Destination routes exhausted — returning home');
+    const trigger: ReplanTrigger = { kind: 'returnHome', message: 'Plan return home after destination routes failed' };
     this.replanner.commit(this.t, trigger);
     this.requestPlan(trigger);
   }
@@ -1021,8 +1039,9 @@ export class SimulationEngine {
       this.activeRoute = null;
       this.addLog('planning', 'No feasible route found', explainNoRoute());
       if (this.state === 'PLANNING') {
-        this.landingPhase = 'emergency';
-        this.setState('EMERGENCY_LANDING', 'No feasible route at launch');
+        this.returnHomeAfterNoPath();
+      } else if (!this.goalIsHome && this.stuckAttempts >= MAX_STUCK_RETRIES) {
+        this.returnHomeAfterNoPath();
       } else if (this.isFlying()) {
         this.holdSince = this.t;
         this.setState('HOLD_POSITION', 'No feasible reroute — holding');
@@ -1264,9 +1283,9 @@ function explainNoRoute(): DecisionExplanation {
   return {
     observation: 'The planner found no collision-free path on the current grid.',
     assessment: 'The goal is unreachable or fully walled off given safety inflation.',
-    options: ['Relax the safety margin', 'Hold and wait', 'Land / abort'],
+    options: ['Try alternative destination routes', 'Return to launch', 'Stay home if not airborne'],
     rationale:
-      'Refusing an unsafe plan is the correct outcome — the autonomy never plans through obstacles.',
+      'Try alternative routes, then plan a return to launch. At launch, stay grounded. Emergency landing is reserved for critical conditions or exhausted routes home.',
     limitations: 'Grid resolution (1 m) and inflation (1.5 m) bound what counts as "no path".',
   };
 }
