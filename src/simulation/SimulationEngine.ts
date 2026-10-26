@@ -73,6 +73,8 @@ export const TRAIL_CAP = 4000;
 const TELEMETRY_DT = 0.25;
 const VO_DT = 0.1;
 export const GOAL_ARRIVE_RADIUS = 2.0;
+export const STUCK_RETRY_SECONDS = 8;
+export const MAX_STUCK_RETRIES = 3;
 
 export class SimulationEngine {
   readonly seed: number;
@@ -105,6 +107,13 @@ export class SimulationEngine {
   planGen = 0;
   routesVersion = 0;
   pendingPlanGen = 0;
+  private stuckAttempts = 0;
+  private failedRoutes: Vec2[][] = [];
+  private progressSince = 0;
+  private bestRemaining = Infinity;
+  private progressBaseline = Infinity;
+  private lastRecoveryT = -Infinity;
+  private recoveryPlanning = false;
 
   private nextSensorScan = 0;
   private nextGpsTick = 0;
@@ -246,6 +255,7 @@ export class SimulationEngine {
   }
 
   setDestination(p: Vec2): void {
+    this.resetStuckRecovery();
     this.goal = { ...p };
     this.goalIsHome = false;
     this.initialDistance = Math.max(1, dist(this.dynamics.pos, p));
@@ -268,6 +278,7 @@ export class SimulationEngine {
 
   commandReturnHome(): void {
     if (this.isTerminal() || this.state === 'EMERGENCY_LANDING') return;
+    this.resetStuckRecovery();
     this.goal = { ...this.startPos };
     this.goalIsHome = true;
     this.retargetFlag = true;
@@ -365,6 +376,7 @@ export class SimulationEngine {
     this.runFusionTick(dt);
     this.handleIntegrityEvents();
     this.stepFSM();
+    this.checkStuckProgress();
     this.computeControl(dt);
     this.checkArrival();
     this.sampleTelemetry();
@@ -660,21 +672,16 @@ export class SimulationEngine {
         }
         const conflictNow = this.lastConflicts.length > 0 && this.lastConflicts[0].tConflict <= 3.0;
         const held = this.holdSince !== null ? this.t - this.holdSince : 0;
-        if (held > 20 && !this.goalIsHome && this.navConfidence > 35) {
-          this.goal = { ...this.startPos };
-          this.goalIsHome = true;
-          this.retargetFlag = true;
-          this.setState('RETURNING', 'Hold timeout — diverting home');
-          this.addLog('recovery', 'Held too long — returning to launch point instead', explainHoldTimeout());
-          this.addTimeline('recovery', 'Divert home after hold');
-          this.dispatchReplan();
+        if (held >= STUCK_RETRY_SECONDS && this.navConfidence > 35 && this.pendingPlanGen === 0) {
+          this.tryStuckRecovery();
           break;
         }
         if (held > 45) {
           this.beginEmergencyLanding('Hold timeout');
           break;
         }
-        if (!conflictNow && held > 1.5 && this.navConfidence > 35) {
+        if (!conflictNow && held > 1.5 && this.navConfidence > 35 && this.activeRoute &&
+          !routeBlocked(this.activeRoute.points, this.follower.segIndex, p => this.grid.isBlockedWorld(p))) {
           this.setState(this.navResumeState(), 'Hold resolved — resuming');
           this.addLog('mission', 'Conflict cleared — resuming route', null);
         }
@@ -743,6 +750,73 @@ export class SimulationEngine {
     this.addTimeline('landing', `Emergency landing (${reason})`);
   }
 
+  private resetStuckRecovery(): void {
+    this.stuckAttempts = 0;
+    this.failedRoutes = [];
+    this.lastRecoveryT = -Infinity;
+    this.resetProgressWatch();
+  }
+
+  private remainingRouteDistance(): number {
+    const points = this.activeRoute?.points;
+    if (!points?.length) return Infinity;
+    const i = Math.min(this.follower.segIndex, points.length - 1);
+    let remaining = dist(this.fusion.pos, points[i]);
+    for (let j = i + 1; j < points.length; j++) remaining += dist(points[j - 1], points[j]);
+    return remaining;
+  }
+
+  private resetProgressWatch(): void {
+    this.progressSince = this.t;
+    this.bestRemaining = this.remainingRouteDistance();
+    this.progressBaseline = this.bestRemaining;
+  }
+
+  private checkStuckProgress(): void {
+    if (!['NAVIGATING', 'GPS_DEGRADED', 'BACKUP_NAVIGATION', 'RETURNING', 'HOLD_POSITION'].includes(this.state) ||
+      this.pendingPlanGen !== 0 || this.navConfidence <= 35 || this.battery <= BATTERY_LOW) {
+      this.progressSince = this.t;
+      return;
+    }
+    const remaining = this.remainingRouteDistance();
+    if (remaining < this.bestRemaining - 1) {
+      this.bestRemaining = remaining;
+      this.progressSince = this.t;
+      if (this.progressBaseline - remaining >= 8) {
+        this.stuckAttempts = 0;
+        this.failedRoutes = [];
+        this.progressBaseline = remaining;
+      }
+    }
+    if (this.t - this.progressSince >= STUCK_RETRY_SECONDS) this.tryStuckRecovery();
+  }
+
+  private tryStuckRecovery(): void {
+    if (this.pendingPlanGen !== 0 || this.t - this.lastRecoveryT < STUCK_RETRY_SECONDS) return;
+    if (this.stuckAttempts >= MAX_STUCK_RETRIES) {
+      if (this.goalIsHome) this.beginEmergencyLanding('Alternative routes home exhausted');
+      else {
+        this.addLog('recovery', 'Three navigation retries failed — returning home', explainHoldTimeout());
+        this.addTimeline('recovery', 'Alternative routes exhausted — return home');
+        this.commandReturnHome();
+        this.dispatchReplan();
+      }
+      return;
+    }
+    if (this.activeRoute) this.failedRoutes.push(this.activeRoute.points.map(p => ({ ...p })));
+    this.stuckAttempts++;
+    this.lastRecoveryT = this.t;
+    this.progressSince = this.t;
+    const message = `Stuck recovery ${this.stuckAttempts}/${MAX_STUCK_RETRIES}: trying another navigation route`;
+    this.addLog('recovery', message, null);
+    this.addTimeline('reroute', message);
+    this.setState('REPLANNING', message);
+    this.recoveryPlanning = true;
+    const trigger: ReplanTrigger = { kind: 'manual', message };
+    this.replanner.commit(this.t, trigger);
+    this.requestPlan(trigger);
+  }
+
   /** Evaluate replan triggers and dispatch a plan request when warranted. */
   private dispatchReplan(): void {
     if (this.pendingPlanGen !== 0) {
@@ -794,6 +868,7 @@ export class SimulationEngine {
       case 'RETURNING':
       case 'LOW_BATTERY': {
         targetAlt = this.cruiseAltitude;
+        if (this.recoveryPlanning) break;
         if (this.activeRoute) {
           const follow = followPath(
             this.fusion.pos,
@@ -912,6 +987,7 @@ export class SimulationEngine {
       K: 3,
       cruiseSpeed: this.cruiseSpeed,
       planId: gen,
+      avoidRoutes: this.failedRoutes.map(route => route.map(p => ({ ...p }))),
     };
     this.addLog(
       'planning',
@@ -937,15 +1013,17 @@ export class SimulationEngine {
 
   private commitRoutes(routes: Route[]): void {
     this.pendingPlanGen = 0;
+    this.recoveryPlanning = false;
     if (this.isTerminal() || this.state === 'EMERGENCY_LANDING') return;
     this.routes = routes;
     this.routesVersion++;
     if (routes.length === 0) {
+      this.activeRoute = null;
       this.addLog('planning', 'No feasible route found', explainNoRoute());
       if (this.state === 'PLANNING') {
         this.landingPhase = 'emergency';
         this.setState('EMERGENCY_LANDING', 'No feasible route at launch');
-      } else if (this.state === 'REPLANNING') {
+      } else if (this.isFlying()) {
         this.holdSince = this.t;
         this.setState('HOLD_POSITION', 'No feasible reroute — holding');
       }
@@ -953,6 +1031,7 @@ export class SimulationEngine {
     }
     this.activeRoute = routes[0];
     this.follower = initFollower();
+    this.resetProgressWatch();
     this.detectedSincePlan = [];
     for (const r of routes) {
       this.addLog(
@@ -1100,7 +1179,7 @@ function explainLowBattery(): DecisionExplanation {
 
 function explainHoldTimeout(): DecisionExplanation {
   return {
-    observation: 'The hold has persisted beyond its time budget with no safe path forward.',
+    observation: 'Three alternative navigation attempts failed to restore route progress.',
     assessment: 'Waiting longer costs battery without resolving the blockage.',
     options: ['Keep holding', 'Force through the conflict zone', 'Divert to the launch point'],
     rationale: 'Diverting home converts an indefinite wait into a bounded, low-risk flight.',
@@ -1215,6 +1294,7 @@ function explainRouteChoice(routes: Route[]): DecisionExplanation {
     limitations: 'Suitability weights (0.45/0.35/0.20) are a design choice, not physics.',
   };
 }
+
 
 
 

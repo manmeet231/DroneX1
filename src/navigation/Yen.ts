@@ -18,6 +18,7 @@ export interface YenOptions {
   spurStrideTargets?: number;
   /** Minimum mean-symmetric Hausdorff distance (m) for a route to count as distinct. */
   distinctThreshold?: number;
+  overlay?: Float32Array;
 }
 
 function directedHausdorff(a: Vec2[], b: Vec2[]): number {
@@ -58,7 +59,7 @@ export function yenKShortest(
   const spurStrideTargets = opts.spurStrideTargets ?? 10;
   const distinctThreshold = opts.distinctThreshold ?? 8;
 
-  const first = astar(grid, start, goal);
+  const first = astar(grid, start, goal, { overlay: opts.overlay, overlayCost: 1 });
   if (!first) return [];
   const A: Vec2[][] = [first];
   const distinct = (a: Vec2[], b: Vec2[]): boolean =>
@@ -113,7 +114,7 @@ export function yenKShortest(
         if (shares) ban(cells[i + 1]);
       }
       spurs++;
-      const spur = astar(grid, prev[i], goal);
+      const spur = astar(grid, prev[i], goal, { overlay: opts.overlay, overlayCost: 1 });
       restore();
       if (!spur) continue;
       // Concatenate root + spur (spur[0] duplicates prev[i]).
@@ -153,6 +154,9 @@ export function yenKShortest(
           }
         }
       }
+    }
+    if (opts.overlay) {
+      for (let i = 0; i < overlay.length; i++) overlay[i] += opts.overlay[i] / weight;
     }
     const candidate = astar(grid, start, goal, { overlay, overlayCost: weight });
     if (candidate && accepted.every((p) => distinct(p, candidate))) {

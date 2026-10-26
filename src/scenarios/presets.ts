@@ -7,7 +7,7 @@ import {
   GPSFaultConfig,
   MovingObstacle,
   StaticObstacle,
-  Vec2,
+  Vec2, 
   WORLD_SIZE,
 } from '../types/simulation';
 import { RNG } from '../core/random';
