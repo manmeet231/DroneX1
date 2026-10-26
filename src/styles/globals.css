@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  @apply bg-deep-900 text-slate-200 font-sans antialiased;
+  overflow: hidden;
+}
+
+@layer components {
+  .panel {
+    @apply bg-deep-800/80 border border-cyan-500/15 rounded-lg backdrop-blur-sm shadow-lg shadow-black/40;
+  }
+  .panel-title {
+    @apply flex items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-widest text-cyan-300/90 border-b border-cyan-500/10 select-none;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded border border-slate-600/60 bg-slate-800/70 text-slate-200 hover:bg-cyan-500/20 hover:border-cyan-400/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply border-cyan-400/60 bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30;
+  }
+  .btn-danger {
+    @apply border-red-500/50 bg-red-500/15 text-red-300 hover:bg-red-500/25;
+  }
+  .btn-warn {
+    @apply border-amber-500/50 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25;
+  }
+  .btn-green {
+    @apply border-emerald-500/50 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider;
+  }
+  .stat-label {
+    @apply text-[10px] uppercase tracking-wider text-slate-400 truncate;
+  }
+  .stat-value {
+    @apply font-mono text-sm text-slate-100;
+  }
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(34, 211, 238, 0.3) transparent;
+  }
+  .scroll-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background: rgba(34, 211, 238, 0.3);
+    border-radius: 3px;
+  }
+  .input-dark {
+    @apply bg-deep-700 border border-slate-600/60 rounded px-1.5 py-1 text-xs font-mono text-slate-100 focus:border-cyan-400/60 focus:outline-none w-full;
+  }
+}
+
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+@keyframes pulse-ring {
+  0% {
+    opacity: 0.65;
+  }
+  100% {
+    opacity: 0.15;
+  }
+}
